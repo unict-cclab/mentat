@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -26,6 +29,12 @@ func main() {
 	err = prometheus.Register(histogram)
 	if err != nil {
 		log.Fatalf("failed registering historgram: %s", err)
+	}
+
+	sleep_seconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
+
+	if err != nil || sleep_seconds <= 0 {
+		log.Fatalf("sleep seconds must be a positive integer")
 	}
 
 	go func() {
@@ -54,7 +63,7 @@ func main() {
 
 			}
 
-			time.Sleep(10 * time.Second)
+			time.Sleep(time.Duration(sleep_seconds) * time.Second)
 		}
 
 	}()
