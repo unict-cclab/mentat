@@ -1,4 +1,4 @@
-module github.com/nathanmartins/mentat
+module github.com/amarchese96/mentat
 
 go 1.15
 
