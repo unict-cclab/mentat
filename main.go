@@ -34,31 +34,31 @@ func main() {
 	sleep_seconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
 
 	if err != nil || sleep_seconds <= 0 {
-		log.Fatalf("sleep seconds must be a positive integer")
+		log.Fatalf("SLEEP_SECONDS must be a positive integer")
 	}
 
 	go func() {
 
 		for {
 
-			hosts, err := getNodeList()
+			nodes, err := getNodeList()
 
 			if err != nil {
 				log.Fatalf("failed getting node list: %s", err)
 			}
 
-			if len(hosts) == 0 {
+			if len(nodes) == 0 {
 				log.Fatal("getNodes returned 0 nodes")
 			}
 
-			for _, host := range hosts {
+			for _, node := range nodes {
 
-				rtt, err := pingHost(host)
+				rtt, err := pingHost(node.Hostname, node.Ip)
 				if err != nil {
-					log.Printf("failed pinging node '%s' : %s", host, err)
+					log.Printf("failed pinging node '%s' : %s", node.Hostname, err)
 				} else {
 					fmt.Printf("Time: %v\n", rtt.Seconds())
-					histogram.WithLabelValues(hostname, host).Observe(rtt.Seconds())
+					histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds())
 				}
 
 			}

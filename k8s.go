@@ -13,9 +13,14 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func getNodeList() ([]string, error) {
+type Node struct {
+	Hostname string
+	Ip       string
+}
 
-	var simpleList []string
+func getNodeList() ([]Node, error) {
+
+	var simpleList []Node
 
 	// Get configuration from within the cluster itself
 	config, err := rest.InClusterConfig()
@@ -36,8 +41,19 @@ func getNodeList() ([]string, error) {
 		return simpleList, err
 	}
 
-	for _, items := range nodes.Items {
-		simpleList = append(simpleList, items.Name)
+	for _, item := range nodes.Items {
+		node := Node{
+			Hostname: item.Name,
+		}
+
+		for _, nodeAddress := range item.Status.Addresses {
+			if nodeAddress.Type == "InternalIP" {
+				node.Ip = nodeAddress.Address
+				break
+			}
+		}
+
+		simpleList = append(simpleList, node)
 	}
 
 	return simpleList, nil
@@ -57,20 +73,18 @@ func getNodeName() (string, error) {
 
 }
 
-func pingHost(destination string) (time.Duration, error) {
+func pingHost(destinationHost, destinationIp string) (time.Duration, error) {
 	bind := "0.0.0.0"
 
 	var remoteAddr *net.IPAddr
 	var pinger *ping.Pinger
 	var rtt time.Duration
 
-	remoteAddr, err := net.ResolveIPAddr("ip4", destination)
-
-	if err != nil {
-		return rtt, err
+	remoteAddr = &net.IPAddr{
+		IP: net.ParseIP(destinationIp),
 	}
 
-	pinger, err = ping.New(bind, "")
+	pinger, err := ping.New(bind, "")
 
 	if err != nil {
 		return rtt, err
@@ -86,7 +100,7 @@ func pingHost(destination string) (time.Duration, error) {
 		return rtt, err
 	}
 
-	log.Printf("ping %s (%s) rtt=%v\n", destination, remoteAddr, rtt)
+	log.Printf("ping %s (%s) rtt=%v\n", destinationHost, remoteAddr, rtt)
 
 	return rtt, nil
 
