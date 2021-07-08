@@ -53,12 +53,15 @@ func main() {
 
 			for _, node := range nodes {
 
-				rtt, err := pingHost(node.Hostname, node.Ip)
-				if err != nil {
-					log.Printf("failed pinging node '%s' : %s", node.Hostname, err)
-				} else {
-					fmt.Printf("Time: %v\n", rtt.Seconds())
-					histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds())
+				if node.Hostname != hostname {
+
+					rtt, err := pingHost(node.Hostname, node.Ip)
+					if err != nil {
+						log.Printf("failed pinging node '%s' : %s", node.Hostname, err)
+					} else {
+						fmt.Printf("Time: %v\n", rtt.Seconds())
+						histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds())
+					}
 				}
 
 			}

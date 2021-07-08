@@ -42,6 +42,7 @@ func getNodeList() ([]Node, error) {
 	}
 
 	for _, item := range nodes.Items {
+
 		node := Node{
 			Hostname: item.Name,
 		}
