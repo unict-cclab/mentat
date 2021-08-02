@@ -14,9 +14,20 @@ import (
 
 func main() {
 
+	sleep_seconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
+
+	if err != nil || sleep_seconds <= 0 {
+		log.Fatalf("SLEEP_SECONDS must be a positive integer")
+	}
+
 	hostname, err := getNodeName()
 	if err != nil {
 		log.Fatalf("failed getting hostname: %s", err)
+	}
+
+	distributionConfig, err := parseNodeLatenciesDistributionConfig("/app/node_latencies_distribution.json")
+	if err != nil {
+		log.Fatalf("failed parsing node latencies distribution config file: %s", err)
 	}
 
 	// Prometheus: Histogram to collect required metrics
@@ -29,12 +40,6 @@ func main() {
 	err = prometheus.Register(histogram)
 	if err != nil {
 		log.Fatalf("failed registering historgram: %s", err)
-	}
-
-	sleep_seconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
-
-	if err != nil || sleep_seconds <= 0 {
-		log.Fatalf("SLEEP_SECONDS must be a positive integer")
 	}
 
 	go func() {
@@ -59,8 +64,10 @@ func main() {
 					if err != nil {
 						log.Printf("failed pinging node '%s' : %s", node.Hostname, err)
 					} else {
-						fmt.Printf("Time: %v\n", rtt.Seconds())
-						histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds())
+						linkInfo := distributionConfig[hostname][node.Hostname]
+						randomContribute := getValueFromDistribution(linkInfo.Distribution, linkInfo.Params)
+						fmt.Printf("Time: %v\n", rtt.Seconds()+randomContribute)
+						histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds() + randomContribute)
 					}
 				}
 
