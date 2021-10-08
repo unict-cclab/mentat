@@ -14,20 +14,15 @@ import (
 )
 
 func main() {
-	sleep_seconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
+	sleepSeconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
 
-	if err != nil || sleep_seconds <= 0 {
+	if err != nil || sleepSeconds <= 0 {
 		log.Fatalf("SLEEP_SECONDS must be a positive integer")
 	}
 
 	hostname, err := k8s.GetNodeName()
 	if err != nil {
 		log.Fatalf("failed getting hostname: %s", err)
-	}
-
-	distributionConfig, err := utils.ParseNodeLatenciesDistributionConfig("/app/node_latencies_distribution.json")
-	if err != nil {
-		log.Fatalf("failed parsing node latencies distribution config file: %s", err)
 	}
 
 	histogram := prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -54,21 +49,19 @@ func main() {
 
 			for _, node := range nodes {
 				if node.Hostname != hostname {
-					rtt, err := utils.PingHost(node.Hostname, node.Ip)
+					rtt, err := utils.PingHost(node.Ip)
 
 					if err != nil {
 						log.Printf("failed pinging node '%s' : %s", node.Hostname, err)
 					} else {
-						linkInfo := distributionConfig[hostname][node.Hostname]
-						randomContribute := utils.GetValueFromDistribution(linkInfo.Distribution, linkInfo.Params)
-						log.Printf("Time: %vs\n", rtt.Seconds()+randomContribute)
-						histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds() + randomContribute)
+						log.Printf("Time: %vs\n", rtt.Seconds())
+						histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds())
 					}
 				}
 
 			}
 
-			time.Sleep(time.Duration(sleep_seconds) * time.Second)
+			time.Sleep(time.Duration(sleepSeconds) * time.Second)
 		}
 
 	}()
