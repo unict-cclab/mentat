@@ -1,5 +1,4 @@
-IMG_NAME ?= ghcr.io/amarchese96/mentat
-IMG_TAG ?= latest
+IMG ?= ghcr.io/amarchese96/mentat:latest
 
 run:
 	go run main.go
@@ -8,7 +7,7 @@ build:
 	go build
 
 docker-build:
-	docker build -t ${IMG_NAME}:${IMG_TAG} .
+	docker build -t ${IMG} .
 
 docker-push:
-	docker push ${IMG_NAME}:${IMG_TAG}
+	docker push ${IMG}
