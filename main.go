@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -13,59 +15,147 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func main() {
-	sleepSeconds, err := strconv.Atoi(os.Getenv("SLEEP_SECONDS"))
+type config struct {
+	probeInterval     time.Duration
+	pingAttempts      int
+	pingTimeout       time.Duration
+	bandwidthPort     int
+	bandwidthBytes    int64
+	bandwidthInterval time.Duration
+	bandwidthTimeout  time.Duration
+}
 
-	if err != nil || sleepSeconds <= 0 {
-		log.Fatalf("SLEEP_SECONDS must be a positive integer")
+func positiveInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
 	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		log.Fatalf("%s must be a positive integer", name)
+	}
+	return parsed
+}
 
+func loadConfig() config {
+	sleepSeconds := positiveInt("SLEEP_SECONDS", 5)
+	return config{
+		probeInterval:     time.Duration(sleepSeconds) * time.Second,
+		pingAttempts:      positiveInt("PING_ATTEMPTS", 5),
+		pingTimeout:       time.Duration(positiveInt("PING_TIMEOUT_SECONDS", 1)) * time.Second,
+		bandwidthPort:     positiveInt("BANDWIDTH_PORT", 2113),
+		bandwidthBytes:    int64(positiveInt("BANDWIDTH_BYTES", 16*1024*1024)),
+		bandwidthInterval: time.Duration(positiveInt("BANDWIDTH_INTERVAL_SECONDS", 60)) * time.Second,
+		bandwidthTimeout:  time.Duration(positiveInt("BANDWIDTH_TIMEOUT_SECONDS", 30)) * time.Second,
+	}
+}
+
+func main() {
+	configuration := loadConfig()
 	hostname, err := k8s.GetNodeName()
 	if err != nil {
-		log.Fatalf("failed getting hostname: %s", err)
+		log.Fatalf("failed getting node name: %s", err)
 	}
 
-	histogram := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	latency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "node_latency",
-		Help:    "Time take ping other nodes",
-		Buckets: []float64{1, 2, 5, 6, 10},
+		Help:    "ICMP round-trip latency between Kubernetes nodes in seconds.",
+		Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
 	}, []string{"origin_node", "destination_node"})
+	packetLoss := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "node_packet_loss_ratio",
+		Help: "Fraction of ICMP probes lost between Kubernetes nodes, from 0 to 1.",
+	}, []string{"origin_node", "destination_node"})
+	bandwidth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "node_bandwidth_bytes_per_second",
+		Help: "Effective TCP throughput measured between Kubernetes nodes in bytes per second.",
+	}, []string{"origin_node", "destination_node"})
+	bandwidthFailures := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "node_bandwidth_probe_failures_total",
+		Help: "Number of failed inter-node TCP bandwidth probes.",
+	}, []string{"origin_node", "destination_node"})
+	prometheus.MustRegister(latency, packetLoss, bandwidth, bandwidthFailures)
 
-	err = prometheus.Register(histogram)
-	if err != nil {
-		log.Fatalf("failed registering historgram: %s", err)
+	go serveBandwidth(configuration)
+	go probeICMP(hostname, configuration, latency, packetLoss)
+	go probeBandwidth(hostname, configuration, bandwidth, bandwidthFailures)
+
+	metricsServer := &http.Server{
+		Addr:              ":2112",
+		Handler:           promhttp.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+	log.Printf("serving Prometheus metrics on %s", metricsServer.Addr)
+	if err := metricsServer.ListenAndServe(); err != nil {
+		log.Fatalf("metrics server failed: %s", err)
+	}
+}
 
-	go func() {
-		for {
-			nodes, err := k8s.GetNodeList()
-			if err != nil {
-				log.Fatalf("failed getting node list: %s", err)
-			}
+func serveBandwidth(configuration config) {
+	server := &http.Server{
+		Addr:              fmt.Sprintf(":%d", configuration.bandwidthPort),
+		Handler:           utils.BandwidthHandler(configuration.bandwidthBytes),
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      configuration.bandwidthTimeout,
+	}
+	log.Printf("serving %d-byte bandwidth probes on %s", configuration.bandwidthBytes, server.Addr)
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("bandwidth server failed: %s", err)
+	}
+}
 
-			if len(nodes) == 0 {
-				log.Fatal("getNodes returned 0 nodes")
-			}
-
-			for _, node := range nodes {
-				if node.Hostname != hostname {
-					rtt, err := utils.PingHost(node.Ip)
-
-					if err != nil {
-						log.Printf("failed pinging node '%s' : %s", node.Hostname, err)
-					} else {
-						log.Printf("Time: %vs\n", rtt.Seconds())
-						histogram.WithLabelValues(hostname, node.Hostname).Observe(rtt.Seconds())
-					}
-				}
-
-			}
-
-			time.Sleep(time.Duration(sleepSeconds) * time.Second)
+func probeICMP(hostname string, configuration config, latency *prometheus.HistogramVec, packetLoss *prometheus.GaugeVec) {
+	for {
+		nodes, err := k8s.GetNodeList()
+		if err != nil {
+			log.Printf("failed getting node list for ICMP probes: %s", err)
+			time.Sleep(configuration.probeInterval)
+			continue
 		}
 
-	}()
+		for _, node := range nodes {
+			if node.Hostname == hostname || node.Ip == "" {
+				continue
+			}
+			result, err := utils.ProbeHost(node.Ip, configuration.pingAttempts, configuration.pingTimeout)
+			if err != nil {
+				log.Printf("failed probing node %q with ICMP: %s", node.Hostname, err)
+				continue
+			}
+			packetLoss.WithLabelValues(hostname, node.Hostname).Set(result.PacketLossRatio())
+			if result.Received > 0 {
+				latency.WithLabelValues(hostname, node.Hostname).Observe(result.AverageRTT.Seconds())
+			}
+		}
+		time.Sleep(configuration.probeInterval)
+	}
+}
 
-	http.Handle("/metrics", promhttp.Handler())
-	_ = http.ListenAndServe(":2112", nil)
+func probeBandwidth(hostname string, configuration config, bandwidth *prometheus.GaugeVec, failures *prometheus.CounterVec) {
+	// Give every DaemonSet pod time to bring up its bandwidth endpoint.
+	time.Sleep(5 * time.Second)
+	for {
+		nodes, err := k8s.GetNodeList()
+		if err != nil {
+			log.Printf("failed getting node list for bandwidth probes: %s", err)
+			time.Sleep(configuration.bandwidthInterval)
+			continue
+		}
+
+		for _, node := range nodes {
+			if node.Hostname == hostname || node.Ip == "" {
+				continue
+			}
+			address := net.JoinHostPort(node.Ip, strconv.Itoa(configuration.bandwidthPort))
+			bytesPerSecond, err := utils.MeasureBandwidth(address, configuration.bandwidthTimeout)
+			if err != nil {
+				log.Printf("failed measuring bandwidth to node %q: %s", node.Hostname, err)
+				bandwidth.WithLabelValues(hostname, node.Hostname).Set(0)
+				failures.WithLabelValues(hostname, node.Hostname).Inc()
+				continue
+			}
+			bandwidth.WithLabelValues(hostname, node.Hostname).Set(bytesPerSecond)
+		}
+		time.Sleep(configuration.bandwidthInterval)
+	}
 }
