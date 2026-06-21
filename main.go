@@ -106,7 +106,7 @@ func serveBandwidth(configuration config) {
 
 func probeICMP(hostname string, configuration config, latency *prometheus.HistogramVec, packetLoss *prometheus.GaugeVec) {
 	for {
-		nodes, err := k8s.GetNodeList()
+		nodes, err := k8s.GetPeerList()
 		if err != nil {
 			log.Printf("failed getting node list for ICMP probes: %s", err)
 			time.Sleep(configuration.probeInterval)
@@ -135,7 +135,7 @@ func probeBandwidth(hostname string, configuration config, bandwidth *prometheus
 	// Give every DaemonSet pod time to bring up its bandwidth endpoint.
 	time.Sleep(5 * time.Second)
 	for {
-		nodes, err := k8s.GetNodeList()
+		nodes, err := k8s.GetPeerList()
 		if err != nil {
 			log.Printf("failed getting node list for bandwidth probes: %s", err)
 			time.Sleep(configuration.bandwidthInterval)

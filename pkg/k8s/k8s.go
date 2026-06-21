@@ -2,7 +2,9 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -14,7 +16,7 @@ type Node struct {
 	Ip       string
 }
 
-func GetNodeList() ([]Node, error) {
+func GetPeerList() ([]Node, error) {
 	var simpleList []Node
 
 	config, err := rest.InClusterConfig()
@@ -27,23 +29,30 @@ func GetNodeList() ([]Node, error) {
 		return simpleList, err
 	}
 
-	nodes, err := c.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{
-		Limit: 500,
+	namespace := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
+	if namespace == "" {
+		data, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		if readErr != nil {
+			return simpleList, fmt.Errorf("determining pod namespace: %w", readErr)
+		}
+		namespace = strings.TrimSpace(string(data))
+	}
+
+	pods, err := c.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: "app=mentat",
+		Limit:         500,
 	})
 	if err != nil {
 		return simpleList, err
 	}
 
-	for _, item := range nodes.Items {
+	for _, item := range pods.Items {
 		node := Node{
-			Hostname: item.Name,
+			Hostname: item.Spec.NodeName,
+			Ip:       item.Status.PodIP,
 		}
-
-		for _, nodeAddress := range item.Status.Addresses {
-			if nodeAddress.Type == "InternalIP" {
-				node.Ip = nodeAddress.Address
-				break
-			}
+		if node.Hostname == "" || node.Ip == "" {
+			continue
 		}
 		simpleList = append(simpleList, node)
 	}

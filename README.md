@@ -1,15 +1,16 @@
 # Mentat inter-node network exporter
 
-Mentat runs as a Kubernetes DaemonSet and measures the network path from every
-node to every other node. It exports Prometheus metrics for:
+Mentat runs as a Kubernetes DaemonSet and measures the Kubernetes pod-overlay
+path from every node to every other node. Agents discover peer Mentat pod IPs,
+so probes traverse the same CNI network used by application workloads. It
+exports Prometheus metrics for:
 
 - ICMP round-trip latency
 - ICMP packet loss
 - Effective TCP bandwidth
 
 Each agent exposes Prometheus metrics on port `2112` and serves a fixed-size
-bandwidth probe payload on port `2113`. The DaemonSet must publish the bandwidth
-port on each node (for example with `hostPort`).
+bandwidth probe payload on port `2113` through its pod IP.
 
 ## Metrics
 
@@ -27,6 +28,7 @@ All metrics use `origin_node` and `destination_node` labels.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `NODE_NAME` | Pod hostname | Kubernetes node running this agent |
+| `POD_NAMESPACE` | Service-account namespace | Namespace used to discover peer Mentat pods |
 | `SLEEP_SECONDS` | `5` | Interval between ICMP probe rounds |
 | `PING_ATTEMPTS` | `5` | ICMP packets sent to each peer per round |
 | `PING_TIMEOUT_SECONDS` | `1` | Timeout for each ICMP packet |
