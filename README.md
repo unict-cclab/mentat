@@ -33,11 +33,13 @@ All metrics use `origin_node` and `destination_node` labels.
 | `PING_ATTEMPTS` | `5` | ICMP packets sent to each peer per round |
 | `PING_TIMEOUT_SECONDS` | `1` | Timeout for each ICMP packet |
 | `BANDWIDTH_PORT` | `2113` | TCP bandwidth endpoint port |
-| `BANDWIDTH_BYTES` | `16777216` | Bytes transferred by each bandwidth probe |
-| `BANDWIDTH_INTERVAL_SECONDS` | `60` | Interval between bandwidth probe rounds |
+| `BANDWIDTH_BYTES` | `262144` | Bytes transferred by each bandwidth probe |
+| `BANDWIDTH_INTERVAL_SECONDS` | `90` | Interval between bandwidth probe rounds |
+| `BANDWIDTH_JITTER_SECONDS` | `30` | Random extra delay added to each bandwidth probe round |
 | `BANDWIDTH_TIMEOUT_SECONDS` | `30` | Timeout for each bandwidth probe |
 
 Bandwidth probes are sequential per agent but agents operate independently.
-Consequently, simultaneous probes can contend with each other; the metric is
-effective available bandwidth under current cluster load, not isolated link
-capacity.
+Each agent adds a random bandwidth jitter before its first probe and after each
+round to reduce synchronized probes across DaemonSet pods. Simultaneous probes
+can still contend with each other; the metric is effective available bandwidth
+under current cluster load, not isolated link capacity.

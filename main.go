@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ type config struct {
 	bandwidthPort     int
 	bandwidthBytes    int64
 	bandwidthInterval time.Duration
+	bandwidthJitter   time.Duration
 	bandwidthTimeout  time.Duration
 }
 
@@ -37,6 +39,18 @@ func positiveInt(name string, fallback int) int {
 	return parsed
 }
 
+func nonNegativeInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		log.Fatalf("%s must be a non-negative integer", name)
+	}
+	return parsed
+}
+
 func loadConfig() config {
 	sleepSeconds := positiveInt("SLEEP_SECONDS", 5)
 	return config{
@@ -44,13 +58,15 @@ func loadConfig() config {
 		pingAttempts:      positiveInt("PING_ATTEMPTS", 5),
 		pingTimeout:       time.Duration(positiveInt("PING_TIMEOUT_SECONDS", 1)) * time.Second,
 		bandwidthPort:     positiveInt("BANDWIDTH_PORT", 2113),
-		bandwidthBytes:    int64(positiveInt("BANDWIDTH_BYTES", 16*1024*1024)),
-		bandwidthInterval: time.Duration(positiveInt("BANDWIDTH_INTERVAL_SECONDS", 60)) * time.Second,
+		bandwidthBytes:    int64(positiveInt("BANDWIDTH_BYTES", 256*1024)),
+		bandwidthInterval: time.Duration(positiveInt("BANDWIDTH_INTERVAL_SECONDS", 90)) * time.Second,
+		bandwidthJitter:   time.Duration(nonNegativeInt("BANDWIDTH_JITTER_SECONDS", 30)) * time.Second,
 		bandwidthTimeout:  time.Duration(positiveInt("BANDWIDTH_TIMEOUT_SECONDS", 30)) * time.Second,
 	}
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	configuration := loadConfig()
 	hostname, err := k8s.GetNodeName()
 	if err != nil {
@@ -133,12 +149,12 @@ func probeICMP(hostname string, configuration config, latency *prometheus.Histog
 
 func probeBandwidth(hostname string, configuration config, bandwidth *prometheus.GaugeVec, failures *prometheus.CounterVec) {
 	// Give every DaemonSet pod time to bring up its bandwidth endpoint.
-	time.Sleep(5 * time.Second)
+	time.Sleep(5*time.Second + randomBandwidthJitter(configuration.bandwidthJitter))
 	for {
 		nodes, err := k8s.GetPeerList()
 		if err != nil {
 			log.Printf("failed getting node list for bandwidth probes: %s", err)
-			time.Sleep(configuration.bandwidthInterval)
+			time.Sleep(nextBandwidthDelay(configuration))
 			continue
 		}
 
@@ -156,6 +172,17 @@ func probeBandwidth(hostname string, configuration config, bandwidth *prometheus
 			}
 			bandwidth.WithLabelValues(hostname, node.Hostname).Set(bytesPerSecond)
 		}
-		time.Sleep(configuration.bandwidthInterval)
+		time.Sleep(nextBandwidthDelay(configuration))
 	}
+}
+
+func nextBandwidthDelay(configuration config) time.Duration {
+	return configuration.bandwidthInterval + randomBandwidthJitter(configuration.bandwidthJitter)
+}
+
+func randomBandwidthJitter(jitter time.Duration) time.Duration {
+	if jitter <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int63n(int64(jitter) + 1))
 }
